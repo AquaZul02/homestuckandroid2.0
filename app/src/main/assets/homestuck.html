@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Ruffle flash emulator for SWF playback -->
+<script src="ruffle.js"></script>
+<style>
+body {
+    background: black;
+    color: white;
+    font-family: monospace;
+    padding: 10px;
+    line-height: 1.4;
+    margin: 0;
+}
+
+h1 {
+    font-size: 1.5rem;
+    margin: 0 0 1rem;
+}
+
+#content {
+    margin-top: 1rem;
+}
+
+#navButtons {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+}
+
+button {
+    margin: 0.5rem 0;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    flex: 1 1 48%;
+}
+
+#pagePicker {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.7);
+    padding: 0.25rem;
+    border-radius: 4px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+#pagePicker button {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+}
+
+#pagePicker select {
+    display: none;
+    font-size: 1rem;
+    padding: 0.25rem;
+    margin-top: 0.25rem;
+    white-space: nowrap;
+}
+
+#pagePicker.expanded select {
+    display: block;
+}
+
+#gifs img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0.5rem auto;
+}
+
+@media (max-width: 480px) {
+    body {padding: 8px;}
+    button {font-size: 0.9rem;}
+    h1 {font-size: 1.2rem;}
+}
+</style>
+</head>
+
+<body>
+
+<h1 id="title"></h1>
+<div id="gifs"></div>         
+<div id="content"></div>
+<div id="navButtons">
+    <button id="prevBtn" onclick="prevPage()">Página Anterior</button>
+    <button id="nextBtn" onclick="nextPage()">Próxima Página</button>
+</div>
+
+<div id="pagePicker">
+    <button id="pagePickerBtn" onclick="togglePagePicker()">☰</button>
+    <select id="pageSelect" onchange="gotoPage(this.value)"></select>
+</div>
+
+<script>
+let pages, pageKeys = [], currentPage;
+
+console.log('loading texto via Android interface');
+try {
+    const txt = Android.getTexto();
+    pages = JSON.parse(txt);
+    pageKeys = Object.keys(pages)
+        .filter(k => /^[0-9]+$/.test(k))
+        .sort((a,b)=>parseInt(a)-parseInt(b));
+    populatePageSelect();
+    currentPage = pageKeys[0];
+    loadPage(currentPage);
+} catch (err) {
+    console.error('android interface error', err);
+    const contentEl = document.getElementById('content');
+    contentEl.textContent = 'Erro ao carregar texto: ' + err;
+    if (!contentEl.style) contentEl.style = {};
+    contentEl.style.color = 'red';
+}
+
+function populatePageSelect() {
+    const sel = document.getElementById('pageSelect');
+    sel.innerHTML = '';
+    pageKeys.forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = pages[id].title ? `${id} – ${pages[id].title}` : id;
+        sel.appendChild(opt);
+    });
+}
+
+function gotoPage(id) {
+    if (!id) return;
+    loadPage(id);
+    const sel = document.getElementById('pageSelect');
+    sel.value = id;
+    // collapse picker after navigation
+    const picker = document.getElementById('pagePicker');
+    picker.classList.remove('expanded');
+}
+
+function togglePagePicker() {
+    const picker = document.getElementById('pagePicker');
+    picker.classList.toggle('expanded');
+    const sel = document.getElementById('pageSelect');
+    if (picker.classList.contains('expanded')) {
+        sel.style.display = 'block';
+        sel.focus();
+    } else {
+        sel.style.display = 'none';
+    }
+}
+
+async function loadPage(id) {
+    if (!id || !pages[id]) return;
+    currentPage = id;
+
+    const titleEl = document.getElementById('title');
+    const contentEl = document.getElementById('content');
+    titleEl.textContent = pages[id].title || '';
+    contentEl.innerHTML = pages[id].content || '';
+
+    // if the page includes an SWF path, embed via Ruffle
+    if (pages[id].swf) {
+        const swfContainer = document.createElement('div');
+        swfContainer.id = 'swfPlayer';
+        swfContainer.style.width = '100%';
+        swfContainer.style.maxWidth = '480px';
+        swfContainer.style.margin = '1rem auto';
+        const ruffle = window.RufflePlayer ? window.RufflePlayer.newest() : null;
+        if (ruffle) {
+            const player = ruffle.createPlayer();
+            swfContainer.appendChild(player);
+            player.load(pages[id].swf);
+        } else {
+            swfContainer.textContent = 'Ruffle não carregado, SWF não pode ser exibido';
+        }
+        contentEl.appendChild(swfContainer);
+    }
+
+    const sel = document.getElementById('pageSelect');
+    if (sel) sel.value = id;
+
+    const idx = pageKeys.indexOf(id);
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    if (idx <= 0) {
+        prevBtn.disabled = true;
+    } else {
+        prevBtn.disabled = false;
+    }
+
+    if (idx < 0 || idx === pageKeys.length - 1) {
+        nextBtn.disabled = true;
+        nextBtn.textContent = 'Próxima Página';
+    } else {
+        nextBtn.disabled = false;
+        const nextId = pageKeys[idx + 1];
+        const nextTitle = pages[nextId].title || '';
+        nextBtn.textContent = 'Próxima: ' + nextTitle;
+    }
+
+    await loadGifsForPage(idx + 1);
+}
+
+function getPageIndex(id) {
+    let idx = pageKeys.indexOf(id);
+    return idx >= 0 ? idx + 1 : null;
+}
+
+async function loadGifsForPage(index) {
+    const container = document.getElementById('gifs');
+    container.innerHTML = '';
+    if (index == null) return;
+
+    const prefix = String(index).padStart(5, '0');
+
+    function imageExists(url) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => resolve(true);
+            img.onerror = () => resolve(false);
+            img.src = url;
+        });
+    }
+
+    let i = 0;
+    let foundAny = false;
+    while (true) {
+        const suffix = i === 0 ? '' : '_' + i;
+        const filename = `hs2/${prefix}${suffix}.gif`;
+
+        const exists = await imageExists(filename);
+        if (!exists) {
+            if (i === 0) {
+                i++;
+                continue;
+            }
+            break;
+        }
+
+        foundAny = true;
+        const img = document.createElement('img');
+        img.src = filename;
+        container.appendChild(img);
+        i++;
+    }
+}
+
+function nextPage() {
+    const idx = pageKeys.indexOf(currentPage);
+    if (idx < 0 || idx >= pageKeys.length - 1) return;
+    const nextId = pageKeys[idx + 1];
+    loadPage(nextId);
+}
+
+function prevPage() {
+    const idx = pageKeys.indexOf(currentPage);
+    if (idx <= 0) return;
+    const prevId = pageKeys[idx - 1];
+    loadPage(prevId);
+}
+</script>
+
+</body>
+</html>
